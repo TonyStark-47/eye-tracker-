@@ -1,0 +1,108 @@
+
+---
+
+### 2. The Python Script (`eye_tracker.py`)
+
+Save the following code into a file named `eye_tracker.py` and run it.
+
+```python
+import cv2
+import mediapipe as mp
+import pyautogui
+import time
+
+# Disable the PyAutoGUI failsafe so the script doesn't crash if you look at the corner of your screen
+pyautogui.FAILSAFE = False
+
+# Initialize MediaPipe Face Mesh (with iris tracking enabled)
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(
+    refine_landmarks=True, 
+    min_detection_confidence=0.7, 
+    min_tracking_confidence=0.7
+)
+
+# Get screen dimensions
+screen_w, screen_h = pyautogui.size()
+
+# Start webcam capture
+cam = cv2.VideoCapture(0)
+
+# Smoothing variables to prevent a jittery mouse
+smooth_factor = 0.2
+prev_x, prev_y = screen_w / 2, screen_h / 2
+last_click_time = 0
+
+print("Eye tracker started. Press 'q' in the video window to quit.")
+
+while True:
+    success, frame = cam.read()
+    if not success:
+        print("Failed to grab frame from camera.")
+        break
+        
+    # Flip the frame horizontally to act like a mirror
+    frame = cv2.flip(frame, 1)
+    frame_h, frame_w, _ = frame.shape
+    
+    # MediaPipe requires RGB color space
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    output = face_mesh.process(rgb_frame)
+    
+    if output.multi_face_landmarks:
+        landmarks = output.multi_face_landmarks[0].landmark
+        
+        # -------------------------
+        # 1. MOUSE MOVEMENT
+        # -------------------------
+        # Landmark 474 represents the center of the right iris
+        iris = landmarks[474]
+        
+        # Map the camera position to screen dimensions.
+        # We scale by 1.5 to make it easier to reach screen edges without extreme head movement.
+        target_x = (iris.x - 0.5) * 1.5 * screen_w + (screen_w / 2)
+        target_y = (iris.y - 0.5) * 1.5 * screen_h + (screen_h / 2)
+        
+        # Clamp values to ensure they stay within screen boundaries
+        target_x = max(0, min(screen_w, target_x))
+        target_y = max(0, min(screen_h, target_y))
+        
+        # Apply smoothing
+        curr_x = prev_x + (target_x - prev_x) * smooth_factor
+        curr_y = prev_y + (target_y - prev_y) * smooth_factor
+        
+        pyautogui.moveTo(curr_x, curr_y)
+        prev_x, prev_y = curr_x, curr_y
+        
+        # Draw a visual indicator on the iris
+        cv2.circle(frame, (int(iris.x * frame_w), int(iris.y * frame_h)), 4, (0, 255, 0), -1)
+
+        # -------------------------
+        # 2. CLICK DETECTION
+        # -------------------------
+        # Landmarks 145 and 159 represent the lower and upper eyelids of the left eye
+        left_eye_top = landmarks[159]
+        left_eye_bottom = landmarks[145]
+        
+        # Calculate the vertical distance between eyelids
+        eye_distance = left_eye_bottom.y - left_eye_top.y
+        
+        # If distance falls below threshold, trigger a click (simulating a blink/wink)
+        if eye_distance < 0.010: 
+            current_time = time.time()
+            # Add a 1-second cooldown to prevent spam clicking
+            if current_time - last_click_time > 1.0: 
+                pyautogui.click()
+                print("Blink detected! Click executed.")
+                last_click_time = current_time
+
+    # Display the output window
+    cv2.imshow('Eye Tracker Mouse', frame)
+    
+    # Exit when 'q' is pressed
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Cleanup
+cam.release()
+cv2.destroyAllWindows()
